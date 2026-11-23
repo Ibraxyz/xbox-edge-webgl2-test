@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#08111f">
+  <title>Xbox Edge — WebGL2 & Gamepad Test</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #08111f; color: #eaf3ff; }
+    body { display: flex; flex-direction: column; }
+    header { z-index: 2; padding: 18px 22px 12px; background: linear-gradient(180deg, rgba(8,17,31,.98), rgba(8,17,31,.82)); }
+    .topline { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .mark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: #107c41; font-size: 21px; font-weight: 800; }
+    h1 { margin: 0; font-size: clamp(18px, 3vw, 25px); letter-spacing: .2px; }
+    .subtitle { margin: 7px 0 0; color: #a9bad0; font-size: 13px; }
+    .status { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .pill { border: 1px solid #263950; border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #b9c9dc; background: rgba(20,37,58,.72); }
+    .pill strong { color: #fff; font-weight: 650; }
+    .pill.ok { border-color: #176c49; color: #93e6b9; }
+    .pill.warn { border-color: #8a6320; color: #ffd58a; }
+    main { position: relative; flex: 1; min-height: 0; padding: 10px 16px 16px; }
+    #glcanvas { display: block; width: 100%; height: 100%; border: 1px solid #1c3450; border-radius: 18px; background: #0b1b2c; }
+    .hud { position: absolute; left: 32px; top: 26px; max-width: min(390px, calc(100% - 64px)); padding: 13px 15px; border: 1px solid rgba(117,153,190,.26); border-radius: 14px; background: rgba(5,13,24,.78); backdrop-filter: blur(8px); }
+    .hud-title { font-size: 14px; font-weight: 700; margin-bottom: 5px; }
+    .hud-copy { font-size: 12px; line-height: 1.55; color: #b6c6d9; }
+    #padline { margin-top: 8px; color: #8fe3b1; font-size: 12px; overflow-wrap: anywhere; }
+    .legend { position: absolute; right: 32px; bottom: 28px; padding: 10px 13px; border-radius: 12px; background: rgba(5,13,24,.72); color: #bac9da; font-size: 12px; line-height: 1.7; }
+    .legend b { color: white; }
+    footer { padding: 0 22px 14px; color: #6f849d; font-size: 11px; }
+    @media (max-width: 650px) {
+      header { padding: 12px 14px 8px; }
+      main { padding: 8px 8px 10px; }
+      .hud { left: 18px; top: 18px; }
+      .legend { right: 18px; bottom: 18px; }
+      footer { padding: 0 14px 9px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topline">
+      <div class="mark">X</div>
+      <div>
+        <h1>Xbox Edge — Browser Game Test</h1>
+        <p class="subtitle">A tiny WebGL 2.0 demo with Xbox controller input</p>
+      </div>
+    </div>
+    <div class="status" aria-live="polite">
+      <span class="pill" id="webglStatus">WebGL2: <strong>checking…</strong></span>
+      <span class="pill" id="gamepadApiStatus">Gamepad API: <strong>checking…</strong></span>
+      <span class="pill" id="controllerStatus">Controller: <strong>waiting…</strong></span>
+    </div>
+  </header>
+  <main>
+    <canvas id="glcanvas" aria-label="Move the glowing square using the controller"></canvas>
+    <section class="hud">
+      <div class="hud-title">Move the glowing square</div>
+      <div class="hud-copy">Press any button or move the left stick on your Xbox controller after this page loads. You can also use the keyboard on a computer.</div>
+      <div id="padline">Waiting for controller input…</div>
+    </section>
+    <aside class="legend"><b>Controls</b><br>Left stick / D-pad<br>Keyboard: WASD / arrows</aside>
+  </main>
+  <footer>POC 01 · HTML + JavaScript + WebGL2 · No game engine or installation required</footer>
+
+  <script>
+    (function () {
+      'use strict';
+
+      const canvas = document.getElementById('glcanvas');
+      const webglStatus = document.getElementById('webglStatus');
+      const gamepadApiStatus = document.getElementById('gamepadApiStatus');
+      const controllerStatus = document.getElementById('controllerStatus');
+      const padline = document.getElementById('padline');
+
+      function setPill(element, label, state, className) {
+        element.className = 'pill ' + (className || '');
+        element.innerHTML = label + ': <strong>' + state + '</strong>';
+      }
+
+      const gl = canvas.getContext('webgl2', {
+        alpha: false,
+        antialias: true,
+        powerPreference: 'high-performance'
+      });
+
+      if (!gl) {
+        setPill(webglStatus, 'WebGL2', 'NOT AVAILABLE', 'warn');
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#0b1b2c';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#ffd58a';
+          ctx.font = '20px sans-serif';
+          ctx.fillText('WebGL 2.0 is not available in this browser.', 28, 50);
+        }
+        return;
+      }
+      setPill(webglStatus, 'WebGL2', 'SUPPORTED', 'ok');
+
+      const vertexSource = `#version 300 es
+        in vec2 aPosition;
+        uniform vec2 uOffset;
+        uniform vec2 uScale;
+        void main() {
+          vec2 p = aPosition * uScale + uOffset;
+          gl_Position = vec4(p, 0.0, 1.0);
+        }
+      `;
+      const fragmentSource = `#version 300 es
+        precision highp float;
+        out vec4 outColor;
+        void main() {
+          outColor = vec4(0.22, 0.92, 0.68, 1.0);
+        }
+      `;
+
+      function compileShader(type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          const message = gl.getShaderInfoLog(shader) || 'Unknown shader error';
+          gl.deleteShader(shader);
+          throw new Error(message);
+        }
+        return shader;
+      }
+
+      let program;
+      try {
+        const vs = compileShader(gl.VERTEX_SHADER, vertexSource);
+        const fs = compileShader(gl.FRAGMENT_SHADER, fragmentSource);
+        program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+        gl.deleteShader(vs);
+        gl.deleteShader(fs);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          throw new Error(gl.getProgramInfoLog(program) || 'Program link failed');
+        }
+      } catch (error) {
+        setPill(webglStatus, 'WebGL2', 'ERROR', 'warn');
+        padline.textContent = 'WebGL shader error: ' + error.message;
+        return;
+      }
+
+      const vertices = new Float32Array([
+        -1, -1,  1, -1, -1,  1,
+        -1,  1,  1, -1,  1,  1
+      ]);
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+      const positionLocation = gl.getAttribLocation(program, 'aPosition');
+      gl.enableVertexAttribArray(positionLocation);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+      const offsetLocation = gl.getUniformLocation(program, 'uOffset');
+      const scaleLocation = gl.getUniformLocation(program, 'uScale');
+
+      let x = 0;
+      let y = 0;
+      const speed = 1.15;
+      const keys = Object.create(null);
+      let activePad = null;
+      let lastTime = 0;
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+        const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width;
+          canvas.height = height;
+        }
+        gl.viewport(0, 0, canvas.width, canvas.height);
+      }
+      window.addEventListener('resize', resize);
+
+      window.addEventListener('keydown', function (event) {
+        const key = event.key.toLowerCase();
+        if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) event.preventDefault();
+        keys[key] = true;
+      }, { passive: false });
+      window.addEventListener('keyup', function (event) {
+        keys[event.key.toLowerCase()] = false;
+      });
+
+      const hasGamepadApi = !!(navigator.getGamepads || navigator.webkitGetGamepads);
+      setPill(gamepadApiStatus, 'Gamepad API', hasGamepadApi ? 'AVAILABLE' : 'NOT AVAILABLE', hasGamepadApi ? 'ok' : 'warn');
+
+      window.addEventListener('gamepadconnected', function (event) {
+        activePad = event.gamepad.index;
+        setPill(controllerStatus, 'Controller', 'CONNECTED', 'ok');
+        padline.textContent = event.gamepad.id + ' · ' + event.gamepad.buttons.length + ' buttons · ' + event.gamepad.axes.length + ' axes';
+      });
+      window.addEventListener('gamepaddisconnected', function (event) {
+        if (activePad === event.gamepad.index) activePad = null;
+        setPill(controllerStatus, 'Controller', 'DISCONNECTED', 'warn');
+        padline.textContent = 'Controller disconnected. Press a button to reconnect.';
+      });
+
+      function getPads() {
+        if (navigator.getGamepads) return navigator.getGamepads();
+        if (navigator.webkitGetGamepads) return navigator.webkitGetGamepads();
+        return [];
+      }
+
+      function deadzone(value) {
+        return Math.abs(value) < 0.16 ? 0 : value;
+      }
+
+      function update(dt) {
+        let dx = 0;
+        let dy = 0;
+
+        if (keys['arrowleft'] || keys['a']) dx -= 1;
+        if (keys['arrowright'] || keys['d']) dx += 1;
+        if (keys['arrowup'] || keys['w']) dy += 1;
+        if (keys['arrowdown'] || keys['s']) dy -= 1;
+
+        const pads = getPads();
+        let pad = activePad !== null ? pads[activePad] : null;
+        if (!pad) {
+          for (let i = 0; i < pads.length; i++) {
+            if (pads[i]) { pad = pads[i]; activePad = i; break; }
+          }
+        }
+        if (pad) {
+          const axes = pad.axes || [];
+          const padX = deadzone(axes[0] || 0);
+          const padY = deadzone(axes[1] || 0);
+          if (padX || padY) {
+            dx = padX;
+            dy = -padY;
+          } else if (pad.buttons && pad.buttons.length >= 16) {
+            if (pad.buttons[14].pressed) dx -= 1;
+            if (pad.buttons[15].pressed) dx += 1;
+            if (pad.buttons[12].pressed) dy += 1;
+            if (pad.buttons[13].pressed) dy -= 1;
+          }
+          if (controllerStatus.textContent.indexOf('CONNECTED') === -1) {
+            setPill(controllerStatus, 'Controller', 'CONNECTED', 'ok');
+            padline.textContent = pad.id + ' · ' + pad.buttons.length + ' buttons · ' + pad.axes.length + ' axes';
+          }
+        }
+
+        const magnitude = Math.hypot(dx, dy);
+        if (magnitude > 1) { dx /= magnitude; dy /= magnitude; }
+        x = Math.max(-0.91, Math.min(0.91, x + dx * speed * dt));
+        y = Math.max(-0.83, Math.min(0.83, y + dy * speed * dt));
+      }
+
+      function render(time) {
+        const dt = lastTime ? Math.min((time - lastTime) / 1000, 0.05) : 0;
+        lastTime = time;
+        resize();
+        update(dt);
+
+        gl.clearColor(0.035, 0.075, 0.12, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(program);
+        gl.bindVertexArray(vao);
+        gl.uniform2f(offsetLocation, x, y);
+        gl.uniform2f(scaleLocation, 0.075, 0.12);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        requestAnimationFrame(render);
+      }
+
+      if (!hasGamepadApi) {
+        padline.textContent = 'This browser does not expose the Gamepad API. Keyboard controls still work.';
+      }
+      requestAnimationFrame(render);
+    })();
+  </script>
+</body>
+</html>
